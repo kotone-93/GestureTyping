@@ -1,32 +1,43 @@
-// ジェスチャーの種類
-// 👍(Thumb_Up), 👎(Thumb_Down), ✌️(Victory), 
-// ☝️(Pointng_Up), ✊(Closed_Fist), 👋(Open_Palm), 
-// 🤟(ILoveYou)
+// ジェスチャーの種類: rock, scissors, ok
 function getCode(left_gesture, right_gesture) {
   let code_array = {
-    "Thumb_Up": 1,
-    "Thumb_Down": 2,
-    "Victory": 3,
-    "Pointing_Up": 4,
-    "Closed_Fist": 5,
-    "Open_Palm": 6,
+    "rock": 1,
+    "scissors": 2,
+    "ok": 3,
   }
   let left_code = code_array[left_gesture];
   let right_code = code_array[right_gesture];
+  if (!left_code || !right_code) {
+    return "";
+  }
   // left_codeとright_codeを文字として結合
   let code = String(left_code) + String(right_code);
   return code;
 }
 
-function getCharacter(code) {
-  const codeToChar = {
-    "11": "a", "12": "b", "13": "c", "14": "d", "15": "e", "16": "f",
-    "21": "g", "22": "h", "23": "i", "24": "j", "25": "k", "26": "l",
-    "31": "m", "32": "n", "33": "o", "34": "p", "35": "q", "36": "r",
-    "41": "s", "42": "t", "43": "u", "44": "v", "45": "w", "46": "x",
-    "51": "y", "52": "z", "53": " ", "54": "backspace"
-  };
-  return codeToChar[code] || "";
+function getCharacter(code, stage) {
+  // stage 0: a-i, stage 1: j-r, stage 2: s-z + space
+  const stages = [
+    {
+      "11": "a", "12": "b", "13": "c",
+      "21": "d", "22": "e", "23": "f",
+      "31": "g", "32": "h", "33": "i"
+    },
+    {
+      "11": "j", "12": "k", "13": "l",
+      "21": "m", "22": "n", "23": "o",
+      "31": "p", "32": "q", "33": "r"
+    },
+    {
+      "11": "s", "12": "t", "13": "u",
+      "21": "v", "22": "w", "23": "x",
+      "31": "y", "32": "z", "33": " "
+    }
+  ];
+  if (stage < 0 || stage >= stages.length) {
+    return "";
+  }
+  return stages[stage][code] || "";
 }
 
 // 入力サンプル文章 
@@ -49,49 +60,134 @@ let game_start_time = 0;
 let gestures_results;
 let cam = null;
 let p5canvas = null;
+let currentStage = 0; // 0: a-i, 1: j-r, 2: s-z+space
 
 function setup() {
   p5canvas = createCanvas(320, 240);
   p5canvas.parent('#canvas');
 
-  // When gestures are found, the following function is called. The detection results are stored in results.
-  let lastChar = "";
-  let lastCharTime = millis();
+  // Multi-stage selection using two-hand combinations
+  let lastCode = "";
+  let lastCodeTime = 0;
+  let lastTypeTime = 0;
+  const holdThresholdMs = 700;
+  const repeatThresholdMs = 850;
+
+  // Single-hand hold for mode switch / long press for backspace / space
+  let singleHandGesture = "";
+  let singleHandTime = 0;
+  let singleHandModeSwitched = false;
+  let singleHandActionDone = false;
+  let singleHandLastRepeatTime = 0;
+  const modeSwitchThresholdMs = 400; // モード切替に必要なホールド時間
+  const singleHoldThresholdMs = 1200; // 長押しアクションのホールド時間
+  const singleRepeatMs = 400;
 
   gotGestures = function (results) {
     gestures_results = results;
+    const now = millis();
 
-    if (results.gestures.length == 2) {
-      if (game_mode.now == "ready" && game_mode.previous == "notready") {
-        // ゲーム開始前の状態から、カメラが起動した後の状態に変化した場合
-        game_mode.previous = game_mode.now;
-        game_mode.now = "playing";
-        document.querySelector('input').value = ""; // 入力欄をクリア
-        game_start_time = millis(); // ゲーム開始時間を記録
-      }
-      let left_gesture;
-      let right_gesture;
-      if (results.handedness[0][0].categoryName == "Left") {
-        left_gesture = results.gestures[0][0].categoryName;
-        right_gesture = results.gestures[1][0].categoryName;
+    // Game start trigger
+    if (game_mode.now == "ready" && game_mode.previous == "notready" && results.gestures && results.gestures.length > 0) {
+      game_mode.previous = game_mode.now;
+      game_mode.now = "playing";
+      document.querySelector('input').value = "";
+      game_start_time = millis();
+    }
+
+    // 片手だけならモード切替 or 長押しでバックスペース/スペース
+    if (results.gestures && results.gestures.length === 1) {
+      const gesture = results.gestures[0]?.[0]?.categoryName || "";
+
+      if (gesture !== singleHandGesture) {
+        // ジェスチャーが変わったらタイマーをリセット
+        singleHandGesture = gesture;
+        singleHandTime = now;
+        singleHandModeSwitched = false;
+        singleHandActionDone = false;
+        singleHandLastRepeatTime = 0;
       } else {
-        left_gesture = results.gestures[1][0].categoryName;
-        right_gesture = results.gestures[0][0].categoryName;
-      }
-      let code = getCode(left_gesture, right_gesture);
-      let c = getCharacter(code);
+        const held = now - singleHandTime;
 
-      let now = millis();
-      if (c === lastChar) {
-        if (now - lastCharTime > 1000) {
-          // 1秒以上cが同じ値である場合の処理
-          typeChar(c);
-          lastCharTime = now;
+        // 400ms以上で初めてモード切替（誤動作防止）
+        if (held >= modeSwitchThresholdMs && !singleHandModeSwitched) {
+          if (gesture === "rock") currentStage = 0;
+          else if (gesture === "scissors") currentStage = 1;
+          else if (gesture === "ok") currentStage = 2;
+          singleHandModeSwitched = true;
         }
-      } else {
-        lastChar = c;
-        lastCharTime = now;
+
+        // 800ms以上で長押しアクション
+        if (held >= singleHoldThresholdMs) {
+          if (gesture === "rock") {
+            // バックスペース：繰り返し発動
+            if (singleHandLastRepeatTime === 0 || now - singleHandLastRepeatTime >= singleRepeatMs) {
+              typeChar("backspace");
+              singleHandLastRepeatTime = now;
+            }
+          } else if (gesture === "ok" && !singleHandActionDone) {
+            // スペース：1回だけ発動
+            typeChar(" ");
+            singleHandActionDone = true;
+          }
+        }
       }
+
+      lastCode = "";
+      return;
+    }
+
+    // 片手でない場合はシングルハンド状態をリセット
+    singleHandGesture = "";
+    singleHandModeSwitched = false;
+    singleHandActionDone = false;
+    singleHandLastRepeatTime = 0;
+
+    if (!results.gestures || results.gestures.length < 2) {
+      lastCode = "";
+      return;
+    }
+
+    let left_gesture = "";
+    let right_gesture = "";
+    
+    // Extract left and right gestures
+    for (let i = 0; i < results.gestures.length; i++) {
+      const gestureName = results.gestures[i]?.[0]?.categoryName || "";
+      // Use handedness if available
+      const handName = results.handednesses?.[i]?.[0]?.categoryName || (i === 0 ? "Left" : "Right");
+      if (handName.includes("Left") || handName === "Left") {
+        left_gesture = gestureName;
+      } else {
+        right_gesture = gestureName;
+      }
+    }
+
+    const code = getCode(left_gesture, right_gesture);
+    const c = getCharacter(code, currentStage);
+
+    if (c === "") {
+      lastCode = "";
+      return;
+    }
+
+    // Same code held for threshold time
+    if (code !== lastCode) {
+      lastCode = code;
+      lastCodeTime = now;
+      return;
+    }
+
+    if (now - lastCodeTime >= holdThresholdMs && now - lastTypeTime >= repeatThresholdMs) {
+      typeChar(c);
+      lastTypeTime = now;
+      // charCountInStage++;
+      
+      // // Auto-advance stage after certain number of characters
+      // if (charCountInStage >= stageAdvanceCharCount && currentStage < 2) {
+      //   currentStage++;
+      //   charCountInStage = 0;
+      // }
     }
 
   }
@@ -286,6 +382,18 @@ function draw() {
     textAlign(CENTER, CENTER);
     text(msg, tx, ty);
   }
+
+  fill(255);
+textSize(20);
+textAlign(LEFT, TOP);
+
+const stageNames = [
+  "Stage 0 : a-i",
+  "Stage 1 : j-r",
+  "Stage 2 : s-z"
+];
+
+text(stageNames[currentStage], 10, 10);
 
 }
 
