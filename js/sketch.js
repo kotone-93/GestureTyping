@@ -81,7 +81,6 @@ function setup() {
   let singleHandLastRepeatTime = 0;
   const modeSwitchThresholdMs = 400; // モード切替に必要なホールド時間
   const singleHoldThresholdMs = 1200; // 長押しアクションのホールド時間
-  const singleRepeatMs = 400;
 
   gotGestures = function (results) {
     gestures_results = results;
@@ -119,12 +118,10 @@ function setup() {
 
         // 800ms以上で長押しアクション
         if (held >= singleHoldThresholdMs) {
-          if (gesture === "rock") {
-            // バックスペース：繰り返し発動
-            if (singleHandLastRepeatTime === 0 || now - singleHandLastRepeatTime >= singleRepeatMs) {
-              typeChar("backspace");
-              singleHandLastRepeatTime = now;
-            }
+          if (gesture === "rock" && !singleHandActionDone) {
+            // バックスペース：1回だけ発動
+            typeChar("backspace");
+            singleHandActionDone = true;
           } else if (gesture === "ok" && !singleHandActionDone) {
             // スペース：1回だけ発動
             typeChar(" ");
